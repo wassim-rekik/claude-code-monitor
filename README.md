@@ -176,7 +176,7 @@ Leave it running in a terminal while you work. Stop it with `Ctrl+C` at any time
 **Step 1 — Start the server**
 
 ```bash
-git clone https://github.com/wassim-rekik/cc-track.git
+git clone https://github.com/wassim-rekik/claude-code-monitor.git
 cd claude-monitor
 cp .env.example .env
 # Edit .env: set API_KEY and DB_PASSWORD
@@ -327,7 +327,7 @@ Contributions are welcome. A few guidelines:
 ### Local setup
 
 ```bash
-git clone https://github.com/wassim-rekik/cc-track.git
+git clone https://github.com/wassim-rekik/claude-code-monitor.git
 cd claude-monitor
 npm install       # installs workspaces
 npm test          # must pass before opening a PR
