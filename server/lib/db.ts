@@ -2,24 +2,29 @@ import { Pool } from "pg";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-export async function migrate() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS usage_records (
-      id             SERIAL PRIMARY KEY,
-      user_id        TEXT        NOT NULL,
-      session_id     TEXT        NOT NULL,
-      model          TEXT        NOT NULL,
-      input_tokens   BIGINT      DEFAULT 0,
-      output_tokens  BIGINT      DEFAULT 0,
-      cache_read     BIGINT      DEFAULT 0,
-      cache_creation BIGINT      DEFAULT 0,
-      project        TEXT,
-      ts             TIMESTAMPTZ NOT NULL,
-      received_at    TIMESTAMPTZ DEFAULT NOW()
-    );
-    CREATE INDEX IF NOT EXISTS idx_user_ts ON usage_records(user_id, ts);
-    CREATE INDEX IF NOT EXISTS idx_ts      ON usage_records(ts);
-  `);
+let _migration: Promise<void> | null = null;
+
+export function migrate(): Promise<void> {
+  if (!_migration) {
+    _migration = pool.query(`
+      CREATE TABLE IF NOT EXISTS usage_records (
+        id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        user_id        TEXT        NOT NULL,
+        session_id     TEXT        NOT NULL,
+        model          TEXT        NOT NULL,
+        input_tokens   BIGINT      DEFAULT 0,
+        output_tokens  BIGINT      DEFAULT 0,
+        cache_read     BIGINT      DEFAULT 0,
+        cache_creation BIGINT      DEFAULT 0,
+        project        TEXT,
+        ts             TIMESTAMPTZ NOT NULL,
+        received_at    TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_user_ts ON usage_records(user_id, ts);
+      CREATE INDEX IF NOT EXISTS idx_ts      ON usage_records(ts);
+    `).then(() => undefined);
+  }
+  return _migration;
 }
 
 export type UsageRecord = {

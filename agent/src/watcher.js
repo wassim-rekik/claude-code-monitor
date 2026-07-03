@@ -83,29 +83,42 @@ export function startWatcher({ user, serverUrl, apiKey, intervalMs = 60_000, sta
     const chunks = [];
     const stream = createReadStream(filePath, { start: cursor, encoding: "utf-8" });
     for await (const chunk of stream) chunks.push(chunk);
-    cursors[filePath] = size;
-    if (!standalone) saveState(cursors);
 
     const records = _parseJsonlChunk(chunks.join(""));
-    if (!records.length) return;
+
+    if (standalone) {
+      cursors[filePath] = size;
+      for (const rec of records.map(r => _toPayload(r, _extractProject(filePath, CLAUDE_LOGS)))) {
+        accumulateRecord(rec);
+      }
+      return;
+    }
+
+    // Server mode: only advance cursor after confirmed delivery
+    if (!records.length) {
+      cursors[filePath] = size;
+      saveState(cursors);
+      return;
+    }
 
     const project = _extractProject(filePath, CLAUDE_LOGS);
     const payload = records.map(r => _toPayload(r, project));
 
-    if (standalone) {
-      for (const rec of payload) accumulateRecord(rec);
-    } else {
-      try {
-        const res = await fetch(`${serverUrl}/api/usage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-api-key": apiKey },
-          body: JSON.stringify({ user, records: payload }),
-        });
-        if (!res.ok) console.error(`[monitor] Server error ${res.status}`);
-        else console.log(`[monitor] Shipped ${payload.length} records for ${user}`);
-      } catch (e) {
-        console.error("[monitor] Network error:", e.message);
+    try {
+      const res = await fetch(`${serverUrl}/api/usage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": apiKey },
+        body: JSON.stringify({ user, records: payload }),
+      });
+      if (res.ok) {
+        cursors[filePath] = size;
+        saveState(cursors);
+        console.log(`[monitor] Shipped ${payload.length} records for ${user}`);
+      } else {
+        console.error(`[monitor] Server error ${res.status} — will retry`);
       }
+    } catch (e) {
+      console.error("[monitor] Network error:", e.message, "— will retry");
     }
   }
 

@@ -1,6 +1,6 @@
 {
   "name": "cc-track-agent",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Monitor your Claude Code token usage — live terminal log or team dashboard. No Anthropic API calls needed.",
   "type": "module",
   "bin": {

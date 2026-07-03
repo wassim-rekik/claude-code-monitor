@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getStats, migrate } from "@/lib/db";
 
-let migrated = false;
-
 export async function GET(req: NextRequest) {
-  if (!migrated) { await migrate(); migrated = true; }
+  await migrate();
 
   const { searchParams } = new URL(req.url);
   const user  = searchParams.get("user")  ?? "all";
