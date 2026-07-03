@@ -1,0 +1,44 @@
+# ─── version control ─────────────────────────────────────────────────────────
+.git/
+.gitignore
+
+# ─── dependencies ────────────────────────────────────────────────────────────
+# Docker installs its own inside the image during `npm ci`
+node_modules/
+
+# ─── next.js build cache ─────────────────────────────────────────────────────
+# The builder stage runs `next build` — prior host builds are irrelevant and
+# including them would bust the layer cache and bloat the image
+.next/
+out/
+
+# ─── tests ───────────────────────────────────────────────────────────────────
+# Tests and their config have no place in a production image
+__tests__/
+vitest.config.ts
+coverage/
+
+# ─── environment & secrets ───────────────────────────────────────────────────
+# Never bake secrets into the image — inject at runtime via docker-compose.yml
+.env
+.env.*
+
+# ─── typescript build artifacts ──────────────────────────────────────────────
+*.tsbuildinfo
+
+# ─── documentation ───────────────────────────────────────────────────────────
+*.md
+LICENSE
+
+# ─── logs ────────────────────────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+
+# ─── os ──────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── editors ─────────────────────────────────────────────────────────────────
+.vscode/
+.idea/

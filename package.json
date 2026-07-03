@@ -1,0 +1,12 @@
+{
+  "name": "claude-monitor-workspace",
+  "private": true,
+  "scripts": {
+    "test": "npm run test --workspace=agent && npm run test --workspace=server",
+    "test:agent": "npm run test --workspace=agent",
+    "test:server": "npm run test --workspace=server",
+    "test:watch:agent": "npm run test:watch --workspace=agent",
+    "test:watch:server": "npm run test:watch --workspace=server"
+  },
+  "workspaces": ["agent", "server"]
+}
