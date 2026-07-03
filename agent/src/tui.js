@@ -1,14 +1,15 @@
-/**
- * tui.js — terminal live log for standalone mode.
- * No interactive deps — just chalk + formatted console output.
- */
-
 import chalk from "chalk";
 
 const PRICING = {
   "claude-opus-4-8":   { input: 5,  output: 25, cacheRead: 0.5,  cacheWrite: 6.25 },
   "claude-sonnet-4-6": { input: 3,  output: 15, cacheRead: 0.3,  cacheWrite: 3.75 },
   "claude-haiku-4-5":  { input: 1,  output: 5,  cacheRead: 0.1,  cacheWrite: 1.25 },
+};
+
+const MODEL_COLOR = {
+  "claude-opus-4-8":   chalk.hex("#a78bfa"),
+  "claude-sonnet-4-6": chalk.hex("#34d399"),
+  "claude-haiku-4-5":  chalk.hex("#60a5fa"),
 };
 
 export function calcCost(model, usage) {
@@ -27,65 +28,87 @@ function fmt(n) {
   return String(n);
 }
 
-function ts() {
-  return new Date().toLocaleTimeString("en-GB", { hour12: false });
+function shortModel(model) {
+  return model
+    .replace("claude-", "")
+    .replace("opus-4-8", "opus-4.8")
+    .replace("sonnet-4-6", "sonnet-4.6")
+    .replace("haiku-4-5", "haiku-4.5");
 }
 
-const MODEL_COLOR = {
-  "claude-opus-4-8":   chalk.hex("#a78bfa"),
-  "claude-sonnet-4-6": chalk.hex("#34d399"),
-  "claude-haiku-4-5":  chalk.hex("#60a5fa"),
-};
-
-function modelLabel(model) {
-  const color = MODEL_COLOR[model] ?? chalk.white;
-  const short = model.replace("claude-", "").replace("-20", " (").replace(/(\d{2})$/, "$1)");
-  return color(short.padEnd(14));
+function truncate(str, max) {
+  return str.length > max ? str.slice(0, max - 1) + "…" : str;
 }
 
-export function printRecord(record) {
-  const cost = calcCost(record.model, record);
-  const line = [
-    chalk.dim(`[${ts()}]`),
-    modelLabel(record.model),
-    chalk.cyan(`+${fmt(record.inputTokens)} in`),
-    chalk.dim("/"),
-    chalk.green(`${fmt(record.outputTokens)} out`),
-    chalk.dim(`cache: ${fmt(record.cacheRead)}r/${fmt(record.cacheCreation)}w`),
-    chalk.yellow(`$${cost.toFixed(4)}`),
-    chalk.dim(record.project ?? ""),
-  ].join("  ");
-  console.log(line);
-}
+/**
+ * Clears the terminal and renders a grouped summary table.
+ * @param {Map<string, {project, model, tokens, cost, sessions: Set}>} groups
+ * @param {string} user
+ */
+export function renderDashboard(groups, user, rangeLabel = "today") {
+  process.stdout.write("\x1b[2J\x1b[0;0H");
 
-export function printSummary(state) {
-  const { tokens, cost, sessions, cacheRead, totalInput } = state;
-  const cacheHitPct = totalInput > 0 ? Math.round((cacheRead / (totalInput + cacheRead)) * 100) : 0;
-  const cacheStatus = cacheHitPct > 30
-    ? chalk.green(`${cacheHitPct}% ✓`)
-    : chalk.yellow(`${cacheHitPct}% (low)`);
+  const now = new Date();
+  const dateStr = now.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  const timeStr = now.toLocaleTimeString("en-GB", { hour12: false });
 
-  const sep = chalk.dim("─".repeat(60));
+  const W = 66;
+  const sep = chalk.dim("─".repeat(W));
+
   console.log(`\n${sep}`);
   console.log(
-    chalk.bold(" Today  ") +
-    chalk.white(`${fmt(tokens)} tokens`) + "  " +
-    chalk.yellow(`$${cost.toFixed(4)}`) + "  " +
-    chalk.dim(`${sessions} sessions`) + "  " +
-    "cache: " + cacheStatus
+    chalk.bold(" cc-track") +
+    chalk.dim("  ·  ") + chalk.white(dateStr) +
+    chalk.dim("  ·  ") + chalk.cyan(user) +
+    chalk.dim("  ·  range: ") + chalk.white(rangeLabel) +
+    chalk.dim(`  ·  ${timeStr}`)
   );
-  console.log(`${sep}\n`);
-}
+  console.log(sep);
 
-export function printHeader(user) {
-  const sep = chalk.dim("─".repeat(60));
-  console.log(`\n${sep}`);
-  console.log(
-    chalk.bold(" Claude Monitor") +
-    chalk.dim("  ·  live  ·  ") +
-    chalk.white(new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })) +
-    chalk.dim("  ·  ") +
-    chalk.cyan(user)
-  );
-  console.log(`${sep}\n`);
+  const rows = [...groups.values()]
+    .map(g => ({ ...g, sessionCount: g.sessions.size }))
+    .sort((a, b) => b.tokens - a.tokens);
+
+  if (rows.length === 0) {
+    console.log(chalk.dim("\n  Watching for activity — use Claude Code to see data here.\n"));
+    console.log(sep + "\n");
+    return;
+  }
+
+  const C = { proj: 28, model: 12, tokens: 9, cost: 9, sessions: 8 };
+
+  console.log("\n" + [
+    chalk.dim("Project".padEnd(C.proj)),
+    chalk.dim("Model".padEnd(C.model)),
+    chalk.dim("Tokens".padStart(C.tokens)),
+    chalk.dim("Cost".padStart(C.cost)),
+    chalk.dim("Sessions".padStart(C.sessions)),
+  ].join("  "));
+  console.log(chalk.dim("─".repeat(W)));
+
+  let totalTokens = 0, totalCost = 0, totalSessions = 0;
+
+  for (const row of rows) {
+    const modelColor = MODEL_COLOR[row.model] ?? chalk.white;
+    console.log([
+      chalk.white(truncate(row.project, C.proj).padEnd(C.proj)),
+      modelColor(shortModel(row.model).padEnd(C.model)),
+      chalk.cyan(fmt(row.tokens).padStart(C.tokens)),
+      chalk.yellow(`$${row.cost.toFixed(3)}`.padStart(C.cost)),
+      chalk.dim(String(row.sessionCount).padStart(C.sessions)),
+    ].join("  "));
+    totalTokens += row.tokens;
+    totalCost += row.cost;
+    totalSessions += row.sessionCount;
+  }
+
+  console.log(chalk.dim("─".repeat(W)));
+  console.log([
+    chalk.bold("TOTAL".padEnd(C.proj + C.model + 2)),
+    chalk.bold.cyan(fmt(totalTokens).padStart(C.tokens)),
+    chalk.bold.yellow(`$${totalCost.toFixed(3)}`.padStart(C.cost)),
+    chalk.dim(String(totalSessions).padStart(C.sessions)),
+  ].join("  "));
+
+  console.log(`\n${sep}\n`);
 }

@@ -13,7 +13,7 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_DIR  = join(homedir(), ".config", "claude-monitor");
+const CONFIG_DIR  = join(homedir(), ".config", "cc-track-agent");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 const AGENT_SCRIPT = join(__dirname, "daemon.js");
 
@@ -29,9 +29,9 @@ export function loadConfig() {
 }
 
 // ─── macOS launchd ───────────────────────────────────────────────────────────
-function installMac(config) {
+function installMac() {
   const plistPath = join(
-    homedir(), "Library", "LaunchAgents", "com.claude-monitor.plist"
+    homedir(), "Library", "LaunchAgents", "com.cc-track-agent.plist"
   );
   const nodePath = execSync("which node", { encoding: "utf-8" }).trim();
 
@@ -41,7 +41,7 @@ function installMac(config) {
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.claude-monitor</string>
+  <string>com.cc-track-agent</string>
 
   <key>ProgramArguments</key>
   <array>
@@ -73,26 +73,26 @@ function installMac(config) {
 }
 
 // ─── Windows registry Run key ────────────────────────────────────────────────
-function installWindows(config) {
+async function installWindows() {
   const nodePath = execSync("where node", { encoding: "utf-8" }).split("\n")[0].trim();
   const cmd = `"${nodePath}" "${AGENT_SCRIPT}"`;
   const regKey = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 
-  execSync(`reg add "${regKey}" /v "ClaudeMonitor" /t REG_SZ /d "${cmd}" /f`);
+  execSync(`reg add "${regKey}" /v "CcTrackAgent" /t REG_SZ /d "${cmd}" /f`);
   console.log(`✓ Registry Run key set`);
 
   const { spawn } = await import("child_process");
   spawn(nodePath, [AGENT_SCRIPT], { detached: true, stdio: "ignore" }).unref();
 }
 
-export async function installService(config) {
+export async function installService() {
   const platform = process.platform;
-  if (platform === "darwin") return installMac(config);
-  if (platform === "win32")  return installWindows(config);
+  if (platform === "darwin") return installMac();
+  if (platform === "win32")  return installWindows();
 
   const unitDir = join(homedir(), ".config", "systemd", "user");
   mkdirSync(unitDir, { recursive: true });
-  const unitPath = join(unitDir, "claude-monitor.service");
+  const unitPath = join(unitDir, "cc-track-agent.service");
   const nodePath = execSync("which node", { encoding: "utf-8" }).trim();
 
   writeFileSync(unitPath, `[Unit]
@@ -107,24 +107,24 @@ RestartSec=10
 WantedBy=default.target
 `);
   execSync("systemctl --user daemon-reload");
-  execSync("systemctl --user enable --now claude-monitor");
+  execSync("systemctl --user enable --now cc-track-agent");
   console.log(`✓ systemd user service installed`);
 }
 
 export function uninstallService() {
   const platform = process.platform;
   if (platform === "darwin") {
-    const plistPath = join(homedir(), "Library", "LaunchAgents", "com.claude-monitor.plist");
+    const plistPath = join(homedir(), "Library", "LaunchAgents", "com.cc-track-agent.plist");
     try {
       execSync(`launchctl unload "${plistPath}"`);
       execSync(`rm "${plistPath}"`);
       console.log("✓ LaunchAgent removed");
     } catch (e) { console.error(e.message); }
   } else if (platform === "win32") {
-    execSync(`reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v ClaudeMonitor /f`);
+    execSync(`reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v CcTrackAgent /f`);
     console.log("✓ Registry key removed");
   } else {
-    execSync("systemctl --user disable --now claude-monitor");
+    execSync("systemctl --user disable --now cc-track-agent");
     console.log("✓ systemd service removed");
   }
 }

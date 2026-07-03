@@ -1,5 +1,5 @@
 #!/bin/bash
-# install.sh — one-line installer for claude-monitor
+# install.sh — one-line installer for cc-track
 # Usage: curl -fsSL https://your-server.com/install.sh | bash -s -- --server https://your-server.com --key SECRET
 
 set -e
@@ -37,7 +37,7 @@ if [ "$NODE_MAJOR" -lt 18 ]; then
 fi
 
 # Install the package globally
-npm install -g claude-monitor --silent
+npm install -g cc-track-agent --silent
 
 # Run init (identity detection + service installation happens here)
-claude-monitor init --server "$SERVER" --key "$KEY"
+cc-track init --server "$SERVER" --key "$KEY"

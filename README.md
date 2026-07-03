@@ -25,8 +25,8 @@ Claude Code writes a detailed record of every conversation to local JSONL files.
 Install on one machine, see your own usage immediately. Zero infrastructure.
 
 ```bash
-npm install -g claude-monitor
-claude-monitor run --standalone
+npm install -g cc-track-agent
+cc-track run --standalone
 ```
 
 ```
@@ -53,8 +53,8 @@ docker compose up --build
 # → http://localhost:3000
 
 # Each developer (one command per machine)
-npm install -g claude-monitor
-claude-monitor init --server https://your-server.com --key YOUR_API_KEY
+npm install -g cc-track-agent
+cc-track init --server https://your-server.com --key YOUR_API_KEY
 ```
 
 ---
@@ -101,7 +101,7 @@ The agent installs as a native background service per platform:
 | Linux | systemd user unit |
 | Windows | Registry Run key |
 
-After `claude-monitor init`, it starts automatically on login and runs silently.
+After `cc-track init`, it starts automatically on login and runs silently.
 
 ---
 
@@ -165,8 +165,8 @@ claude-monitor/
 ### Option A — Standalone (one developer, no server)
 
 ```bash
-npm install -g claude-monitor
-claude-monitor run --standalone
+npm install -g cc-track-agent
+cc-track run --standalone
 ```
 
 Leave it running in a terminal while you work. Stop it with `Ctrl+C` at any time.
@@ -176,7 +176,7 @@ Leave it running in a terminal while you work. Stop it with `Ctrl+C` at any time
 **Step 1 — Start the server**
 
 ```bash
-git clone https://github.com/your-org/claude-monitor.git
+git clone https://github.com/wassim-rekik/cc-track.git
 cd claude-monitor
 cp .env.example .env
 # Edit .env: set API_KEY and DB_PASSWORD
@@ -186,8 +186,8 @@ docker compose up --build -d
 **Step 2 — Install the agent on each developer machine**
 
 ```bash
-npm install -g claude-monitor
-claude-monitor init --server https://your-server.com --key YOUR_API_KEY
+npm install -g cc-track-agent
+cc-track init --server https://your-server.com --key YOUR_API_KEY
 ```
 
 Or distribute the one-liner:
@@ -290,7 +290,7 @@ npm test          # unit tests — no database needed
 | `API_KEY` | Shared secret. Agents include this in every request. |
 | `DB_PASSWORD` | PostgreSQL password. |
 
-### `~/.config/claude-monitor/config.json` (agent)
+### `~/.config/cc-track-agent/config.json` (agent)
 
 ```json
 {
@@ -327,7 +327,7 @@ Contributions are welcome. A few guidelines:
 ### Local setup
 
 ```bash
-git clone https://github.com/your-org/claude-monitor.git
+git clone https://github.com/wassim-rekik/cc-track.git
 cd claude-monitor
 npm install       # installs workspaces
 npm test          # must pass before opening a PR

@@ -9,7 +9,7 @@ import chokidar from "chokidar";
 import { createReadStream, statSync, existsSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
-import { calcCost, printRecord, printSummary, printHeader } from "./tui.js";
+import { calcCost, renderDashboard } from "./tui.js";
 
 const CLAUDE_LOGS = join(homedir(), ".claude", "projects");
 const STATE_FILE  = join(homedir(), ".claude", ".monitor-state.json");
@@ -25,17 +25,24 @@ export function _parseJsonlChunk(text) {
     .split("\n")
     .filter(Boolean)
     .flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } })
-    .filter(r => r.type === "assistant" && r.usage);
+    .filter(r => r.type === "assistant" && r.message?.usage &&
+                 (r.message.usage.input_tokens ?? 0) + (r.message.usage.output_tokens ?? 0) > 0);
 }
 
-export function _toPayload(record, project) {
+export function _toPayload(record, fallbackProject) {
+  const usage = record.message?.usage ?? {};
+  const model = (record.message?.model ?? record.model ?? "unknown")
+    .replace(/-\d{8}$/, ""); // strip date suffix e.g. -20251001
+  const project = record.cwd
+    ? record.cwd.split("/").filter(Boolean).slice(-2).join("/")
+    : fallbackProject;
   return {
-    sessionId:     record.session_id,
-    model:         record.model ?? "unknown",
-    inputTokens:   record.usage.input_tokens               ?? 0,
-    outputTokens:  record.usage.output_tokens              ?? 0,
-    cacheRead:     record.usage.cache_read_input_tokens    ?? 0,
-    cacheCreation: record.usage.cache_creation_input_tokens ?? 0,
+    sessionId:     record.sessionId ?? record.session_id,
+    model,
+    inputTokens:   usage.input_tokens                ?? 0,
+    outputTokens:  usage.output_tokens               ?? 0,
+    cacheRead:     usage.cache_read_input_tokens     ?? 0,
+    cacheCreation: usage.cache_creation_input_tokens ?? 0,
     timestamp:     record.timestamp ?? new Date().toISOString(),
     project,
   };
@@ -48,13 +55,24 @@ function saveState(state) {
   writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 }
 
-export function startWatcher({ user, serverUrl, apiKey, intervalMs = 60_000, standalone = false }) {
-  const cursors = loadState();
+export function startWatcher({ user, serverUrl, apiKey, intervalMs = 60_000, standalone = false, since = null, rangeLabel = "today" }) {
+  // standalone: always start from byte 0 so the time filter controls what's shown
+  const cursors = standalone ? {} : loadState();
 
-  // Accumulated daily totals for standalone summary
-  const daily = { tokens: 0, cost: 0, sessions: new Set(), cacheRead: 0, totalInput: 0 };
+  // Groups keyed by "project|||model" for the grouped dashboard
+  const groups = new Map();
 
-  if (standalone) printHeader(user);
+  function accumulateRecord(rec) {
+    if (since && new Date(rec.timestamp) < since) return;
+    const key = `${rec.project}|||${rec.model}`;
+    if (!groups.has(key)) {
+      groups.set(key, { project: rec.project, model: rec.model, tokens: 0, cost: 0, sessions: new Set() });
+    }
+    const g = groups.get(key);
+    g.tokens += rec.inputTokens + rec.outputTokens;
+    g.cost   += calcCost(rec.model, rec);
+    g.sessions.add(rec.sessionId);
+  }
 
   async function processFile(filePath) {
     if (!existsSync(filePath)) return;
@@ -66,24 +84,16 @@ export function startWatcher({ user, serverUrl, apiKey, intervalMs = 60_000, sta
     const stream = createReadStream(filePath, { start: cursor, encoding: "utf-8" });
     for await (const chunk of stream) chunks.push(chunk);
     cursors[filePath] = size;
-    saveState(cursors);
+    if (!standalone) saveState(cursors);
 
     const records = _parseJsonlChunk(chunks.join(""));
     if (!records.length) return;
 
-    const project = extractProject(filePath);
+    const project = _extractProject(filePath, CLAUDE_LOGS);
     const payload = records.map(r => _toPayload(r, project));
 
     if (standalone) {
-      for (const rec of payload) {
-        const totalTok = rec.inputTokens + rec.outputTokens;
-        daily.tokens    += totalTok;
-        daily.cost      += calcCost(rec.model, rec);
-        daily.cacheRead += rec.cacheRead;
-        daily.totalInput += rec.inputTokens;
-        daily.sessions.add(rec.sessionId);
-        printRecord(rec);
-      }
+      for (const rec of payload) accumulateRecord(rec);
     } else {
       try {
         const res = await fetch(`${serverUrl}/api/usage`, {
@@ -99,10 +109,6 @@ export function startWatcher({ user, serverUrl, apiKey, intervalMs = 60_000, sta
     }
   }
 
-  function extractProject(filePath) {
-    return _extractProject(filePath, CLAUDE_LOGS);
-  }
-
   const watcher = chokidar.watch(`${CLAUDE_LOGS}/**/*.jsonl`, {
     ignoreInitial: false,
     persistent: true,
@@ -113,14 +119,16 @@ export function startWatcher({ user, serverUrl, apiKey, intervalMs = 60_000, sta
     .on("add",    path => processFile(path).catch(console.error))
     .on("change", path => processFile(path).catch(console.error));
 
-  // Periodic poll + summary in standalone mode
-  setInterval(() => {
-    Object.keys(cursors).forEach(p => processFile(p).catch(console.error));
-    if (standalone) {
-      printSummary({ ...daily, sessions: daily.sessions.size });
-    }
-  }, intervalMs);
+  if (standalone) {
+    // Render immediately after startup files settle, then on every interval
+    setTimeout(() => renderDashboard(groups, user, rangeLabel), 3000);
+    setInterval(() => {
+      Object.keys(cursors).forEach(p => processFile(p).catch(console.error));
+      renderDashboard(groups, user, rangeLabel);
+    }, intervalMs);
+  } else {
+    console.log(`[monitor] Watching ${CLAUDE_LOGS} as ${user}`);
+  }
 
-  if (!standalone) console.log(`[monitor] Watching ${CLAUDE_LOGS} as ${user}`);
   return watcher;
 }

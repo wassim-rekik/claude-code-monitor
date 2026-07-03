@@ -1,9 +1,6 @@
-# claude-monitor agent
+# cc-track-agent
 
-The agent is a lightweight Node.js process that runs on each developer's machine. It watches the local JSONL files that Claude Code writes, extracts token usage from every assistant response, and either:
-
-- Prints a **live terminal log** (standalone mode — no server needed), or
-- **Ships records to your team server** over HTTP (server mode).
+Monitor your Claude Code token usage from the terminal — grouped by project and model, filtered by time range. No Anthropic API calls. No server required for standalone mode.
 
 ---
 
@@ -16,15 +13,69 @@ The agent is a lightweight Node.js process that runs on each developer's machine
 
 ## Installation
 
-### Global install from npm
-
 ```bash
-npm install -g claude-monitor
+npm install -g cc-track-agent
 ```
 
-### One-line installer (server mode only)
+---
 
-If your team runs the server, distribute this command to every developer:
+## Standalone mode — terminal dashboard
+
+No server, no configuration needed. Just run:
+
+```bash
+cc-track run --standalone
+```
+
+The dashboard refreshes every 10 seconds and shows usage grouped by project and model:
+
+```
+──────────────────────────────────────────────────────────────────
+ cc-track  ·  03 Jul 2026  ·  you@example.com  ·  range: today  ·  10:45:00
+──────────────────────────────────────────────────────────────────
+
+Project                       Model            Tokens       Cost  Sessions
+──────────────────────────────────────────────────────────────────
+myorg/frontend                sonnet-4.6       149.3k     $9.08         3
+myorg/backend                 sonnet-4.6        85.3k     $5.65         2
+myorg/infra                   haiku-4.5          5.8k     $0.16         1
+──────────────────────────────────────────────────────────────────
+TOTAL                                          240.4k    $14.89         6
+
+──────────────────────────────────────────────────────────────────
+```
+
+### Time range filter
+
+By default only today's usage is shown. Use `--range` to change the window:
+
+```bash
+cc-track run --standalone                  # today (default)
+cc-track run --standalone --range 7d       # last 7 days
+cc-track run --standalone --range 30d      # last 30 days
+cc-track run --standalone --range all      # all history
+```
+
+---
+
+## Server mode — ship to team dashboard
+
+Point the agent at a running [claude-monitor server](../server/README.md):
+
+```bash
+cc-track init --server https://your-server.com --key YOUR_API_KEY
+```
+
+`init` does three things:
+1. Auto-detects your identity (see [Identity detection](#identity-detection) below)
+2. Saves config to `~/.config/cc-track-agent/config.json`
+3. Installs a background service that starts automatically on login
+
+Once initialized, the agent runs silently in the background and ships every new usage record to the server within seconds.
+
+### One-line team installer
+
+Distribute this to every developer on your team:
 
 ```bash
 curl -fsSL https://your-server.com/install.sh | bash -s -- \
@@ -32,63 +83,17 @@ curl -fsSL https://your-server.com/install.sh | bash -s -- \
   --key YOUR_API_KEY
 ```
 
-This checks Node.js ≥ 18, installs the package globally, auto-detects the developer's identity, and registers a background service that starts on login.
-
----
-
-## Modes
-
-### Standalone — terminal live log
-
-No server, no configuration. Just run:
-
-```bash
-claude-monitor run --standalone
-```
-
-You will see a live stream of every new assistant response as Claude Code writes it, plus a rolling daily summary:
-
-```
-────────────────────────────────────────────────────────────
- Claude Monitor  ·  live  ·  03 Jul 2026  ·  you@example.com
-────────────────────────────────────────────────────────────
-
- [10:41:02]  sonnet-4-6      +1.2k in  /  340 out   cache: 800r/0w   $0.0042  myorg/myrepo
- [10:41:09]  opus-4-8        +5.0k in  /  1.2k out  cache: 2.1kr/0w  $0.0560  myorg/myrepo
-
-────────────────────────────────────────────────────────────
- Today  45,320 tokens   $1.24   5 sessions   cache: 34% ✓
-────────────────────────────────────────────────────────────
-```
-
-The summary prints every 60 seconds and updates incrementally — no restart needed.
-
-### Server mode — ship to team dashboard
-
-Point the agent at your running server:
-
-```bash
-claude-monitor init --server https://your-server.com --key YOUR_API_KEY
-```
-
-`init` does three things:
-1. Auto-detects your identity (see [Identity detection](#identity-detection) below)
-2. Saves config to `~/.config/claude-monitor/config.json`
-3. Installs a background service so monitoring starts automatically on login
-
-Once initialized, the agent runs silently in the background. Every new usage record is shipped to `POST /api/usage` on your server within seconds.
-
 ---
 
 ## CLI reference
 
 | Command | Description |
 |---|---|
-| `claude-monitor init --server <url> --key <key>` | First-time setup: detect identity, save config, install background service |
-| `claude-monitor status` | Show current configuration (user, server URL) |
-| `claude-monitor run` | Run in foreground using saved config (useful for debugging) |
-| `claude-monitor run --standalone` | Run in foreground, terminal log only — no server required |
-| `claude-monitor uninstall` | Stop and remove the background service |
+| `cc-track init --server <url> --key <key>` | First-time setup: detect identity, save config, install background service |
+| `cc-track status` | Show current configuration |
+| `cc-track run --standalone [--range <r>]` | Terminal dashboard — no server needed |
+| `cc-track run` | Run in foreground using saved server config |
+| `cc-track uninstall` | Stop and remove the background service |
 
 ---
 
@@ -98,7 +103,7 @@ The agent resolves your identity automatically — no manual email entry. It tri
 
 | Priority | Source | How |
 |---|---|---|
-| 1 | **macOS Keychain** | Reads the Claude Code OAuth token and decodes the email from the JWT payload |
+| 1 | **macOS Keychain** | Reads the Claude Code OAuth token, decodes email from the JWT |
 | 2 | **`~/.claude/.credentials.json`** | Same JWT decode, works cross-platform |
 | 3 | **`git config --global user.email`** | Your global git identity |
 | 4 | **OS username** | Last-resort fallback |
@@ -107,102 +112,61 @@ No API call is ever made to Anthropic during identity detection.
 
 ---
 
-## Background service
+## Background service (server mode)
 
-After `claude-monitor init`, a platform-native service is installed that starts the agent on login:
+After `cc-track init`, a platform-native service is installed:
 
 | Platform | Mechanism | Config location |
 |---|---|---|
-| macOS | launchd LaunchAgent | `~/Library/LaunchAgents/com.claude-monitor.plist` |
-| Linux | systemd user unit | `~/.config/systemd/user/claude-monitor.service` |
+| macOS | launchd LaunchAgent | `~/Library/LaunchAgents/com.cc-track-agent.plist` |
+| Linux | systemd user unit | `~/.config/systemd/user/cc-track-agent.service` |
 | Windows | Registry Run key | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` |
 
-**Logs** are written to:
-- `~/.config/claude-monitor/stdout.log`
-- `~/.config/claude-monitor/stderr.log`
-
-To remove the service at any time:
+Logs are written to `~/.config/cc-track-agent/stdout.log` and `stderr.log`.
 
 ```bash
-claude-monitor uninstall
+cc-track uninstall   # stop and remove the service
 ```
 
 ---
 
-## Configuration file
+## What data is read
 
-Config is stored at `~/.config/claude-monitor/config.json`:
+The agent reads JSONL files written by Claude Code:
+
+```
+~/.claude/projects/<project>/<session-id>.jsonl
+```
+
+Only `assistant` messages with token usage are processed. User messages, tool results, and metadata lines are ignored. Zero-token synthetic entries are skipped.
+
+### What gets sent to the server (server mode only)
 
 ```json
 {
   "user": "you@example.com",
-  "serverUrl": "https://your-server.com",
-  "apiKey": "your-api-key"
+  "records": [{
+    "sessionId": "abc123",
+    "model": "claude-sonnet-4-6",
+    "inputTokens": 1200,
+    "outputTokens": 340,
+    "cacheRead": 800,
+    "cacheCreation": 0,
+    "timestamp": "2026-07-03T10:15:00.000Z",
+    "project": "myorg/myrepo"
+  }]
 }
 ```
 
-You can edit this file directly if you need to update the server URL or key without re-running `init`.
+Sent to `POST {serverUrl}/api/usage` with an `x-api-key` header. Cursors are persisted in `~/.claude/.monitor-state.json` so no record is shipped twice across restarts.
 
----
-
-## What gets sent to the server
-
-Each assistant response from Claude Code produces one record:
-
-```json
-{
-  "user": "you@example.com",
-  "records": [
-    {
-      "sessionId": "abc123",
-      "model": "claude-sonnet-4-6",
-      "inputTokens": 1200,
-      "outputTokens": 340,
-      "cacheRead": 800,
-      "cacheCreation": 0,
-      "timestamp": "2026-07-03T10:15:00.000Z",
-      "project": "myorg/myrepo"
-    }
-  ]
-}
-```
-
-Records are sent to `POST {serverUrl}/api/usage` with an `x-api-key` header. Cursor positions are persisted in `~/.claude/.monitor-state.json` so no record is sent twice, even across restarts.
-
----
-
-## Local log files
-
-The agent reads from:
-
-```
-~/.claude/projects/<org>/<project>/<session-id>.jsonl
-```
-
-Only `assistant` messages that include a `usage` field are processed. User messages, tool results, and metadata lines are ignored.
-
----
-
-## Development
-
-```bash
-# Install dependencies
-npm install
-
-# Run tests
-npm test
-
-# Run tests in watch mode
-npm run test:watch
-```
-
-Tests cover pricing math, JSONL parsing, project path extraction, record transformation, and the identity fallback chain. All tests run without network access or filesystem side effects.
+In standalone mode, nothing leaves your machine.
 
 ---
 
 ## Pricing used for cost estimates
 
-Cost estimates are calculated locally using public Anthropic pricing (per million tokens):
+Calculated locally using public Anthropic pricing (per million tokens):
 
 | Model | Input | Output | Cache read | Cache write |
 |---|---|---|---|---|
@@ -210,4 +174,16 @@ Cost estimates are calculated locally using public Anthropic pricing (per millio
 | claude-sonnet-4-6 | $3 | $15 | $0.30 | $3.75 |
 | claude-haiku-4-5 | $1 | $5 | $0.10 | $1.25 |
 
-These are estimates only. No Anthropic API call is made to verify actual billing.
+These are estimates only. No Anthropic API call is made.
+
+---
+
+## Development
+
+```bash
+npm install
+npm test           # run tests once
+npm run test:watch # watch mode
+```
+
+Tests cover pricing math, JSONL parsing, project extraction, record transformation, identity fallback chain, and service module exports. All tests run without network access or filesystem side effects.

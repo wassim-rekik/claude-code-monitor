@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * claude-monitor CLI
+ * cc-track CLI
  *
  * Usage:
- *   claude-monitor init --server https://your-server.com --key SECRET
- *   claude-monitor status
- *   claude-monitor run [--standalone]
- *   claude-monitor uninstall
+ *   cc-track init --server https://your-server.com --key SECRET
+ *   cc-track status
+ *   cc-track run [--standalone]
+ *   cc-track uninstall
  */
 
 import { detectIdentity } from "./identity.js";
@@ -28,7 +28,7 @@ const flags = Object.fromEntries(
 if (cmd === "init") {
   const { server, key } = flags;
   if (!server || !key) {
-    console.error("Usage: claude-monitor init --server <url> --key <key>");
+    console.error("Usage: cc-track init --server <url> --key <key>");
     process.exit(1);
   }
 
@@ -44,14 +44,14 @@ if (cmd === "init") {
   await installService(config);
 
   console.log(`
-✅ Done! claude-monitor is running in the background.
+✅ Done! cc-track is running in the background.
 
    Identity : ${user}
    Server   : ${server}
-   Logs dir : ~/.config/claude-monitor/
+   Logs dir : ~/.config/cc-track-agent/
 
-To check status : claude-monitor status
-To uninstall    : claude-monitor uninstall
+To check status : cc-track status
+To uninstall    : cc-track uninstall
 `);
 }
 
@@ -59,7 +59,7 @@ To uninstall    : claude-monitor uninstall
 else if (cmd === "status") {
   const config = loadConfig();
   if (!config) {
-    console.log("❌ Not configured. Run: claude-monitor init --server <url> --key <key>");
+    console.log("❌ Not configured. Run: cc-track init --server <url> --key <key>");
     process.exit(1);
   }
   console.log(`
@@ -78,27 +78,48 @@ else if (cmd === "uninstall") {
 // ─── run (foreground, for dev/debug) ─────────────────────────────────────────
 else if (cmd === "run") {
   const standalone = "standalone" in flags;
+  const rangeArg   = flags.range ?? "today";
+  const since      = parseSince(rangeArg);
 
   if (standalone) {
-    // Standalone: read local logs + print to terminal, no server needed
     const { detectIdentity } = await import("./identity.js");
     const user = detectIdentity();
-    startWatcher({ user, serverUrl: null, apiKey: null, intervalMs: 10_000, standalone: true });
+    startWatcher({ user, serverUrl: null, apiKey: null, intervalMs: 10_000, standalone: true, since, rangeLabel: rangeArg });
   } else {
     const config = loadConfig();
-    if (!config) { console.error("Not configured. Run: claude-monitor init"); process.exit(1); }
-    startWatcher({ ...config, intervalMs: 10_000 });
+    if (!config) { console.error("Not configured. Run: cc-track init"); process.exit(1); }
+    startWatcher({ ...config, intervalMs: 10_000, since, rangeLabel: rangeArg });
   }
 }
 
 else {
   console.log(`
-claude-monitor — Claude Code usage agent
+cc-track — Claude Code usage agent
 
 Commands:
-  init        --server <url> --key <key>   First-time setup
-  status                                    Show current config
-  run         [--standalone]                Run in foreground (--standalone: terminal only, no server)
-  uninstall                                 Remove background service
+  init        --server <url> --key <key>      First-time setup
+  status                                       Show current config
+  run         [--standalone] [--range <r>]     Run in foreground
+                --standalone  terminal only, no server
+                --range       today (default) | 7d | 30d | all
+  uninstall                                    Remove background service
 `);
+}
+
+function parseSince(range) {
+  if (range === "all") return null;
+  if (range === "today") {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+  const days = parseInt(range, 10);
+  if (!isNaN(days)) {
+    const d = new Date();
+    d.setDate(d.getDate() - days);
+    return d;
+  }
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
 }

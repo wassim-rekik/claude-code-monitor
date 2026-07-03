@@ -25,20 +25,32 @@ describe("_extractProject", () => {
   });
 });
 
-describe("_parseJsonlChunk", () => {
-  const assistantLine = JSON.stringify({
-    type: "assistant",
-    session_id: "s1",
+// Actual Claude Code JSONL format: usage nested under record.message, cwd for project
+const makeRecord = (overrides = {}) => JSON.stringify({
+  type: "assistant",
+  sessionId: "s1",
+  timestamp: "2026-07-03T10:00:00Z",
+  cwd: "/Users/dev/projects/my-app",
+  message: {
     model: "claude-sonnet-4-6",
-    timestamp: "2026-07-03T10:00:00Z",
-    usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 20, cache_creation_input_tokens: 0 },
-  });
+    usage: {
+      input_tokens: 100,
+      output_tokens: 50,
+      cache_read_input_tokens: 20,
+      cache_creation_input_tokens: 0,
+    },
+  },
+  ...overrides,
+});
+
+describe("_parseJsonlChunk", () => {
+  const assistantLine = makeRecord();
 
   it("parses valid assistant records", () => {
     const records = _parseJsonlChunk(assistantLine);
     expect(records).toHaveLength(1);
     expect(records[0].type).toBe("assistant");
-    expect(records[0].usage.input_tokens).toBe(100);
+    expect(records[0].message.usage.input_tokens).toBe(100);
   });
 
   it("filters out non-assistant records", () => {
@@ -47,10 +59,17 @@ describe("_parseJsonlChunk", () => {
     expect(records).toHaveLength(1);
   });
 
-  it("filters out assistant records without usage", () => {
-    const noUsage = JSON.stringify({ type: "assistant", content: "hi" });
-    const records = _parseJsonlChunk(noUsage);
-    expect(records).toHaveLength(0);
+  it("filters out assistant records without message.usage", () => {
+    const noUsage = JSON.stringify({ type: "assistant", message: { content: "hi" } });
+    expect(_parseJsonlChunk(noUsage)).toHaveLength(0);
+  });
+
+  it("filters out zero-token records (synthetic entries)", () => {
+    const zeroTokens = JSON.stringify({
+      type: "assistant",
+      message: { model: "<synthetic>", usage: { input_tokens: 0, output_tokens: 0 } },
+    });
+    expect(_parseJsonlChunk(zeroTokens)).toHaveLength(0);
   });
 
   it("silently skips malformed JSON lines", () => {
@@ -72,19 +91,23 @@ describe("_parseJsonlChunk", () => {
 
 describe("_toPayload", () => {
   const raw = {
-    session_id: "abc123",
-    model: "claude-sonnet-4-6",
+    type: "assistant",
+    sessionId: "abc123",
     timestamp: "2026-07-03T10:00:00Z",
-    usage: {
-      input_tokens: 1200,
-      output_tokens: 340,
-      cache_read_input_tokens: 800,
-      cache_creation_input_tokens: 50,
+    cwd: "/Users/dev/projects/myorg/myrepo",
+    message: {
+      model: "claude-sonnet-4-6",
+      usage: {
+        input_tokens: 1200,
+        output_tokens: 340,
+        cache_read_input_tokens: 800,
+        cache_creation_input_tokens: 50,
+      },
     },
   };
 
   it("maps all fields correctly", () => {
-    const p = _toPayload(raw, "myorg/myrepo");
+    const p = _toPayload(raw, "fallback");
     expect(p.sessionId).toBe("abc123");
     expect(p.model).toBe("claude-sonnet-4-6");
     expect(p.inputTokens).toBe(1200);
@@ -95,24 +118,41 @@ describe("_toPayload", () => {
     expect(p.timestamp).toBe("2026-07-03T10:00:00Z");
   });
 
+  it("uses cwd last 2 segments as project name", () => {
+    const p = _toPayload(raw, "fallback");
+    expect(p.project).toBe("myorg/myrepo");
+  });
+
+  it("falls back to provided project when cwd is absent", () => {
+    const { cwd: _, ...noCwd } = raw;
+    const p = _toPayload(noCwd, "fallback-project");
+    expect(p.project).toBe("fallback-project");
+  });
+
+  it("strips date suffix from model name", () => {
+    const withDate = { ...raw, message: { ...raw.message, model: "claude-haiku-4-5-20251001" } };
+    const p = _toPayload(withDate, "fallback");
+    expect(p.model).toBe("claude-haiku-4-5");
+  });
+
   it("defaults missing usage fields to 0", () => {
-    const sparse = { ...raw, usage: { input_tokens: 100 } };
-    const p = _toPayload(sparse, "default");
+    const sparse = { ...raw, message: { model: "claude-sonnet-4-6", usage: { input_tokens: 100 } } };
+    const p = _toPayload(sparse, "fallback");
     expect(p.outputTokens).toBe(0);
     expect(p.cacheRead).toBe(0);
     expect(p.cacheCreation).toBe(0);
   });
 
   it("defaults model to 'unknown' when absent", () => {
-    const { model: _m, ...noModel } = raw;
-    const p = _toPayload(noModel, "default");
+    const noModel = { ...raw, message: { usage: raw.message.usage } };
+    const p = _toPayload(noModel, "fallback");
     expect(p.model).toBe("unknown");
   });
 
   it("uses current timestamp when record has none", () => {
     const { timestamp: _t, ...noTs } = raw;
     const before = new Date().toISOString();
-    const p = _toPayload(noTs, "default");
+    const p = _toPayload(noTs, "fallback");
     expect(new Date(p.timestamp).getTime()).toBeGreaterThanOrEqual(new Date(before).getTime());
   });
 });
