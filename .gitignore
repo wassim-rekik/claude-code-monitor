@@ -64,3 +64,6 @@ Desktop.ini
 .turbo/
 .vercel/
 .cache/
+
+# ─── local ai context (never synced) ─────────────────────────────────────────
+context/
