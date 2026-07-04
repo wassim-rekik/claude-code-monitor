@@ -1,4 +1,14 @@
 import { Pool } from "pg";
+import { calcCost, modelFamily } from "@/lib/pricing";
+import { makeAvatar } from "@/lib/avatar";
+import { BURN_WINDOW_HOURS, BURN_LIMIT_TOKENS, MAX_PROJECTS_RETURNED } from "@/lib/config";
+import type {
+  UsageRecord,
+  DailyUsageRow,
+  ProjectUsageRow,
+  StatsResponse,
+  DashboardUser,
+} from "@/lib/types";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -6,7 +16,9 @@ let _migration: Promise<void> | null = null;
 
 export function migrate(): Promise<void> {
   if (!_migration) {
-    _migration = pool.query(`
+    _migration = pool
+      .query(
+        `
       CREATE TABLE IF NOT EXISTS usage_records (
         id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         user_id        TEXT        NOT NULL,
@@ -22,23 +34,21 @@ export function migrate(): Promise<void> {
       );
       CREATE INDEX IF NOT EXISTS idx_user_ts ON usage_records(user_id, ts);
       CREATE INDEX IF NOT EXISTS idx_ts      ON usage_records(ts);
-    `).then(() => undefined);
+
+      -- Added after the initial release: a unique key on the natural identity of a
+      -- record so that re-shipping the same record (agent retry, at-least-once
+      -- delivery) is a no-op instead of a duplicate row. Appended as a new
+      -- statement rather than editing the CREATE TABLE above.
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_records_identity
+        ON usage_records(session_id, model, ts);
+    `,
+      )
+      .then(() => undefined);
   }
   return _migration;
 }
 
-export type UsageRecord = {
-  sessionId:     string;
-  model:         string;
-  inputTokens:   number;
-  outputTokens:  number;
-  cacheRead:     number;
-  cacheCreation: number;
-  project?:      string;
-  timestamp:     string;
-};
-
-export async function insertRecords(userId: string, records: UsageRecord[]) {
+export async function insertRecords(userId: string, records: UsageRecord[]): Promise<number> {
   if (!records.length) return 0;
   const values: unknown[] = [];
   const placeholders = records.map((r, i) => {
@@ -49,56 +59,30 @@ export async function insertRecords(userId: string, records: UsageRecord[]) {
       r.cacheRead, r.cacheCreation,
       r.project ?? null, r.timestamp,
     );
-    return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8},$${base+9})`;
+    return `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8},$${base + 9})`;
   });
   await pool.query(
     `INSERT INTO usage_records
        (user_id,session_id,model,input_tokens,output_tokens,cache_read,cache_creation,project,ts)
      VALUES ${placeholders.join(",")}
-     ON CONFLICT DO NOTHING`,
+     ON CONFLICT (session_id, model, ts) DO NOTHING`,
     values,
   );
   return records.length;
 }
 
-const PRICING: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
-  "claude-opus-4-8":   { input: 5,  output: 25, cacheRead: 0.5,  cacheWrite: 6.25 },
-  "claude-sonnet-4-6": { input: 3,  output: 15, cacheRead: 0.3,  cacheWrite: 3.75 },
-  "claude-haiku-4-5":  { input: 1,  output: 5,  cacheRead: 0.1,  cacheWrite: 1.25 },
-};
-
-function calcCost(model: string, inp: number, out: number, cr: number, cc: number) {
-  const p = PRICING[model] ?? PRICING["claude-sonnet-4-6"];
-  return (inp / 1e6) * p.input + (out / 1e6) * p.output +
-         (cr  / 1e6) * p.cacheRead + (cc  / 1e6) * p.cacheWrite;
+interface ModelDayRow {
+  day: Date;
+  model: string;
+  input_tokens: string;
+  output_tokens: string;
+  cache_read: string;
+  cache_creation: string;
+  sessions: string;
 }
 
-export type DailyRow = {
-  date:      string;
-  opus:      number;
-  sonnet:    number;
-  haiku:     number;
-  total:     number;
-  cost:      number;
-  cacheHit:  number;
-  sessions:  number;
-};
-
-export type ProjectRow = {
-  project:  string;
-  tokens:   number;
-  cost:     number;
-  sessions: number;
-};
-
-export async function getStats(userId: string, rangeDays: number) {
-  // Daily breakdown
-  const { rows } = await pool.query<{
-    day: Date; model: string;
-    input_tokens: string; output_tokens: string;
-    cache_read: string; cache_creation: string;
-    sessions: string;
-  }>(
+async function getDailyBreakdown(userId: string, rangeDays: number): Promise<DailyUsageRow[]> {
+  const { rows } = await pool.query<ModelDayRow>(
     `SELECT
        DATE_TRUNC('day', ts AT TIME ZONE 'UTC') AS day,
        model,
@@ -115,8 +99,7 @@ export async function getStats(userId: string, rangeDays: number) {
     [rangeDays, userId],
   );
 
-  // Aggregate by day across models
-  const byDay = new Map<string, DailyRow>();
+  const byDay = new Map<string, DailyUsageRow>();
   for (const r of rows) {
     const date = r.day.toISOString().slice(0, 10);
     if (!byDay.has(date)) {
@@ -125,51 +108,50 @@ export async function getStats(userId: string, rangeDays: number) {
     const d = byDay.get(date)!;
     const inp = Number(r.input_tokens);
     const out = Number(r.output_tokens);
-    const cr  = Number(r.cache_read);
-    const cc  = Number(r.cache_creation);
-    const tok = inp + out;
+    const cacheRead = Number(r.cache_read);
+    const cacheCreation = Number(r.cache_creation);
+    const tokens = inp + out;
 
-    if (r.model.includes("opus"))   d.opus   += tok;
-    else if (r.model.includes("haiku")) d.haiku += tok;
-    else                                d.sonnet += tok;
-
-    d.total    += tok;
-    d.cost     += calcCost(r.model, inp, out, cr, cc);
+    d[modelFamily(r.model)] += tokens;
+    d.total += tokens;
+    d.cost += calcCost(r.model, inp, out, cacheRead, cacheCreation);
     d.sessions += Number(r.sessions);
 
-    // Cache hit % = cacheRead / (cacheRead + inputTokens)
-    const denominator = cr + inp;
-    if (denominator > 0) d.cacheHit = Math.round((cr / denominator) * 100);
+    const cacheDenominator = cacheRead + inp;
+    if (cacheDenominator > 0) d.cacheHit = Math.round((cacheRead / cacheDenominator) * 100);
   }
 
-  const daily = Array.from(byDay.values()).map(d => ({
-    ...d,
-    cost: parseFloat(d.cost.toFixed(4)),
-  }));
+  return Array.from(byDay.values()).map((d) => ({ ...d, cost: parseFloat(d.cost.toFixed(4)) }));
+}
 
-  // Summary totals
-  const totalTokens   = daily.reduce((a, d) => a + d.total, 0);
-  const totalCost     = parseFloat(daily.reduce((a, d) => a + d.cost, 0).toFixed(4));
-  const totalSessions = daily.reduce((a, d) => a + d.sessions, 0);
-  const avgCacheHit   = daily.length ? Math.round(daily.reduce((a, d) => a + d.cacheHit, 0) / daily.length) : 0;
-
-  // 5-hour burn rate (independent of rangeDays)
-  const { rows: burnRows } = await pool.query<{ used: string }>(
+async function getBurnRate5h(userId: string) {
+  const { rows } = await pool.query<{ used: string }>(
     `SELECT SUM(input_tokens + output_tokens) AS used
      FROM usage_records
-     WHERE ts >= NOW() - INTERVAL '5 hours'
+     WHERE ts >= NOW() - ($2 || ' hours')::INTERVAL
        AND ($1::TEXT = 'all' OR user_id = $1)`,
-    [userId],
+    [userId, BURN_WINDOW_HOURS],
   );
-  const burnUsed = Number(burnRows[0]?.used ?? 0);
+  const used = Number(rows[0]?.used ?? 0);
+  return {
+    used,
+    limit: BURN_LIMIT_TOKENS,
+    pct: Math.min(100, Math.round((used / BURN_LIMIT_TOKENS) * 100)),
+  };
+}
 
-  // Per-project breakdown
-  const { rows: projRows } = await pool.query<{
-    project: string; model: string;
-    input_tokens: string; output_tokens: string;
-    cache_read: string; cache_creation: string;
-    sessions: string;
-  }>(
+interface ModelProjectRow {
+  project: string;
+  model: string;
+  input_tokens: string;
+  output_tokens: string;
+  cache_read: string;
+  cache_creation: string;
+  sessions: string;
+}
+
+async function getProjectBreakdown(userId: string, rangeDays: number): Promise<ProjectUsageRow[]> {
+  const { rows } = await pool.query<ModelProjectRow>(
     `SELECT
        COALESCE(project, 'unknown') AS project,
        model,
@@ -182,50 +164,55 @@ export async function getStats(userId: string, rangeDays: number) {
      WHERE ts >= NOW() - ($1 || ' days')::INTERVAL
        AND ($2::TEXT = 'all' OR user_id = $2)
      GROUP BY project, model
-     ORDER BY project, SUM(input_tokens + output_tokens) DESC`,
-    [rangeDays, userId],
+     ORDER BY project, SUM(input_tokens + output_tokens) DESC
+     LIMIT $3`,
+    [rangeDays, userId, MAX_PROJECTS_RETURNED],
   );
 
-  const byProject = new Map<string, ProjectRow>();
-  for (const r of projRows) {
-    if (!byProject.has(r.project)) byProject.set(r.project, { project: r.project, tokens: 0, cost: 0, sessions: 0 });
+  const byProject = new Map<string, ProjectUsageRow>();
+  for (const r of rows) {
+    if (!byProject.has(r.project)) {
+      byProject.set(r.project, { project: r.project, tokens: 0, cost: 0, sessions: 0 });
+    }
     const p = byProject.get(r.project)!;
-    const inp = Number(r.input_tokens), out = Number(r.output_tokens);
-    const cr  = Number(r.cache_read),   cc  = Number(r.cache_creation);
-    p.tokens  += inp + out;
-    p.cost    += calcCost(r.model, inp, out, cr, cc);
+    const inp = Number(r.input_tokens);
+    const out = Number(r.output_tokens);
+    const cacheRead = Number(r.cache_read);
+    const cacheCreation = Number(r.cache_creation);
+    p.tokens += inp + out;
+    p.cost += calcCost(r.model, inp, out, cacheRead, cacheCreation);
     p.sessions = Math.max(p.sessions, Number(r.sessions));
   }
-  const projects = Array.from(byProject.values())
-    .sort((a, b) => b.tokens - a.tokens)
-    .map(p => ({ ...p, cost: parseFloat(p.cost.toFixed(4)) }));
 
-  return {
-    daily,
-    projects,
-    summary: {
-      totalTokens,
-      totalCost,
-      totalSessions,
-      avgCacheHit,
-      burnRate5h: {
-        used: burnUsed,
-        limit: 800_000,
-        pct: Math.min(100, Math.round((burnUsed / 800_000) * 100)),
-      },
-    },
-  };
+  return Array.from(byProject.values())
+    .sort((a, b) => b.tokens - a.tokens)
+    .map((p) => ({ ...p, cost: parseFloat(p.cost.toFixed(4)) }));
 }
 
-export async function getUsers() {
+function summarize(daily: DailyUsageRow[], burnRate5h: StatsResponse["summary"]["burnRate5h"]) {
+  const totalTokens = daily.reduce((a, d) => a + d.total, 0);
+  const totalCost = parseFloat(daily.reduce((a, d) => a + d.cost, 0).toFixed(4));
+  const totalSessions = daily.reduce((a, d) => a + d.sessions, 0);
+  const avgCacheHit = daily.length
+    ? Math.round(daily.reduce((a, d) => a + d.cacheHit, 0) / daily.length)
+    : 0;
+
+  return { totalTokens, totalCost, totalSessions, avgCacheHit, burnRate5h };
+}
+
+export async function getStats(userId: string, rangeDays: number): Promise<StatsResponse> {
+  const [daily, burnRate5h, projects] = await Promise.all([
+    getDailyBreakdown(userId, rangeDays),
+    getBurnRate5h(userId),
+    getProjectBreakdown(userId, rangeDays),
+  ]);
+
+  return { daily, projects, summary: summarize(daily, burnRate5h) };
+}
+
+export async function getUsers(): Promise<DashboardUser[]> {
   const { rows } = await pool.query<{ user_id: string }>(
     `SELECT DISTINCT user_id FROM usage_records ORDER BY user_id`,
   );
-  return rows.map(r => {
-    const parts = r.user_id.split(/[@.\s]/);
-    const avatar = (parts[0]?.[0] ?? "?").toUpperCase() + (parts[1]?.[0] ?? "").toUpperCase();
-    return { id: r.user_id, label: r.user_id, avatar };
-  });
+  return rows.map((r) => ({ id: r.user_id, label: r.user_id, avatar: makeAvatar(r.user_id) }));
 }
-
-export { pool };

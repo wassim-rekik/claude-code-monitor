@@ -14,6 +14,7 @@ const MOCK_STATS = {
     { date: "2026-07-01", opus: 80000, sonnet: 200000, haiku: 50000, total: 330000, cost: 12.45, cacheHit: 35, sessions: 3 },
     { date: "2026-07-02", opus: 60000, sonnet: 180000, haiku: 40000, total: 280000, cost: 10.20, cacheHit: 28, sessions: 2 },
   ],
+  projects: [],
   summary: {
     totalTokens: 610000,
     totalCost: 22.65,
