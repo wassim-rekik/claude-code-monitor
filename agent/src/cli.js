@@ -11,6 +11,7 @@
 
 import { userInfo } from "os";
 import { fileURLToPath } from "url";
+import { realpathSync } from "fs";
 import { saveConfig, loadConfig, installService, uninstallService } from "./service.js";
 import { startWatcher } from "./watcher.js";
 
@@ -158,6 +159,16 @@ Commands:
 }
 
 // Only run when executed directly (as the CLI entrypoint), not when imported for testing.
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+// Resolve symlinks on both sides — npm's global bin is a symlink, so a raw
+// process.argv[1] === fileURLToPath(import.meta.url) comparison fails post-install.
+function isEntrypoint() {
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isEntrypoint()) {
   main();
 }
