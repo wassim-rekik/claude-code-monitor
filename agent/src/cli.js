@@ -3,13 +3,13 @@
  * cc-track CLI
  *
  * Usage:
- *   cc-track init --server https://your-server.com --key SECRET
+ *   cc-track init --user you@example.com --server https://your-server.com --key SECRET
  *   cc-track status
- *   cc-track run [--standalone]
+ *   cc-track run [--standalone] [--user <email>] [--range <r>]
  *   cc-track uninstall
  */
 
-import { detectIdentity } from "./identity.js";
+import { userInfo } from "os";
 import { saveConfig, loadConfig, installService, uninstallService } from "./service.js";
 import { startWatcher } from "./watcher.js";
 
@@ -26,14 +26,11 @@ const flags = Object.fromEntries(
 
 // ─── init ─────────────────────────────────────────────────────────────────────
 if (cmd === "init") {
-  const { server, key } = flags;
-  if (!server || !key) {
-    console.error("Usage: cc-track init --server <url> --key <key>");
+  const { user, server, key } = flags;
+  if (!user || !server || !key) {
+    console.error("Usage: cc-track init --user <email> --server <url> --key <key>");
     process.exit(1);
   }
-
-  console.log("\n🔍 Detecting your identity from Claude Code...");
-  const user = detectIdentity();
 
   const config = { user, serverUrl: server.replace(/\/$/, ""), apiKey: key };
 
@@ -46,7 +43,7 @@ if (cmd === "init") {
   console.log(`
 ✅ Done! cc-track is running in the background.
 
-   Identity : ${user}
+   User     : ${user}
    Server   : ${server}
    Logs dir : ~/.config/cc-track-agent/
 
@@ -82,8 +79,7 @@ else if (cmd === "run") {
   const since      = parseSince(rangeArg);
 
   if (standalone) {
-    const { detectIdentity } = await import("./identity.js");
-    const user = detectIdentity();
+    const user = flags.user || userInfo().username;
     startWatcher({ user, serverUrl: null, apiKey: null, intervalMs: 10_000, standalone: true, since, rangeLabel: rangeArg });
   } else {
     const config = loadConfig();
@@ -97,12 +93,13 @@ else {
 cc-track — Claude Code usage agent
 
 Commands:
-  init        --server <url> --key <key>      First-time setup
-  status                                       Show current config
-  run         [--standalone] [--range <r>]     Run in foreground
+  init        --user <email> --server <url> --key <key>   First-time setup
+  status                                                    Show current config
+  run         [--standalone] [--user <email>] [--range r]  Run in foreground
                 --standalone  terminal only, no server
+                --user        your identifier (default: OS username)
                 --range       today (default) | 7d | 30d | all
-  uninstall                                    Remove background service
+  uninstall                                                 Remove background service
 `);
 }
 

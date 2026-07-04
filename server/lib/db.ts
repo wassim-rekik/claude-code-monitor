@@ -84,6 +84,13 @@ export type DailyRow = {
   sessions:  number;
 };
 
+export type ProjectRow = {
+  project:  string;
+  tokens:   number;
+  cost:     number;
+  sessions: number;
+};
+
 export async function getStats(userId: string, rangeDays: number) {
   // Daily breakdown
   const { rows } = await pool.query<{
@@ -141,12 +148,12 @@ export async function getStats(userId: string, rangeDays: number) {
   }));
 
   // Summary totals
-  const totalTokens  = daily.reduce((a, d) => a + d.total, 0);
-  const totalCost    = parseFloat(daily.reduce((a, d) => a + d.cost, 0).toFixed(4));
+  const totalTokens   = daily.reduce((a, d) => a + d.total, 0);
+  const totalCost     = parseFloat(daily.reduce((a, d) => a + d.cost, 0).toFixed(4));
   const totalSessions = daily.reduce((a, d) => a + d.sessions, 0);
-  const avgCacheHit  = daily.length ? Math.round(daily.reduce((a, d) => a + d.cacheHit, 0) / daily.length) : 0;
+  const avgCacheHit   = daily.length ? Math.round(daily.reduce((a, d) => a + d.cacheHit, 0) / daily.length) : 0;
 
-  // 5-hour burn rate
+  // 5-hour burn rate (independent of rangeDays)
   const { rows: burnRows } = await pool.query<{ used: string }>(
     `SELECT SUM(input_tokens + output_tokens) AS used
      FROM usage_records
@@ -156,8 +163,46 @@ export async function getStats(userId: string, rangeDays: number) {
   );
   const burnUsed = Number(burnRows[0]?.used ?? 0);
 
+  // Per-project breakdown
+  const { rows: projRows } = await pool.query<{
+    project: string; model: string;
+    input_tokens: string; output_tokens: string;
+    cache_read: string; cache_creation: string;
+    sessions: string;
+  }>(
+    `SELECT
+       COALESCE(project, 'unknown') AS project,
+       model,
+       SUM(input_tokens)   AS input_tokens,
+       SUM(output_tokens)  AS output_tokens,
+       SUM(cache_read)     AS cache_read,
+       SUM(cache_creation) AS cache_creation,
+       COUNT(DISTINCT session_id) AS sessions
+     FROM usage_records
+     WHERE ts >= NOW() - ($1 || ' days')::INTERVAL
+       AND ($2::TEXT = 'all' OR user_id = $2)
+     GROUP BY project, model
+     ORDER BY project, SUM(input_tokens + output_tokens) DESC`,
+    [rangeDays, userId],
+  );
+
+  const byProject = new Map<string, ProjectRow>();
+  for (const r of projRows) {
+    if (!byProject.has(r.project)) byProject.set(r.project, { project: r.project, tokens: 0, cost: 0, sessions: 0 });
+    const p = byProject.get(r.project)!;
+    const inp = Number(r.input_tokens), out = Number(r.output_tokens);
+    const cr  = Number(r.cache_read),   cc  = Number(r.cache_creation);
+    p.tokens  += inp + out;
+    p.cost    += calcCost(r.model, inp, out, cr, cc);
+    p.sessions = Math.max(p.sessions, Number(r.sessions));
+  }
+  const projects = Array.from(byProject.values())
+    .sort((a, b) => b.tokens - a.tokens)
+    .map(p => ({ ...p, cost: parseFloat(p.cost.toFixed(4)) }));
+
   return {
     daily,
+    projects,
     summary: {
       totalTokens,
       totalCost,

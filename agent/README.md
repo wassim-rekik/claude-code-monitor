@@ -25,6 +25,7 @@ No server, no configuration needed. Just run:
 
 ```bash
 cc-track run --standalone
+cc-track run --standalone --user you@example.com   # optional: set your identifier
 ```
 
 The dashboard refreshes every 10 seconds and shows usage grouped by project and model:
@@ -63,13 +64,13 @@ cc-track run --standalone --range all      # all history
 Point the agent at a running [claude-monitor server](../server/README.md):
 
 ```bash
-cc-track init --server https://your-server.com --key YOUR_API_KEY
+cc-track init --user you@example.com --server https://your-server.com --key YOUR_API_KEY
 ```
 
 `init` does three things:
-1. Auto-detects your identity (see [Identity detection](#identity-detection) below)
-2. Saves config to `~/.config/cc-track-agent/config.json`
-3. Installs a background service that starts automatically on login
+1. Saves config to `~/.config/cc-track-agent/config.json`
+2. Installs a background service that starts automatically on login
+3. Starts shipping token records to the server immediately
 
 Once initialized, the agent runs silently in the background and ships every new usage record to the server within seconds.
 
@@ -79,6 +80,7 @@ Distribute this to every developer on your team:
 
 ```bash
 curl -fsSL https://your-server.com/install.sh | bash -s -- \
+  --user you@example.com \
   --server https://your-server.com \
   --key YOUR_API_KEY
 ```
@@ -89,26 +91,11 @@ curl -fsSL https://your-server.com/install.sh | bash -s -- \
 
 | Command | Description |
 |---|---|
-| `cc-track init --server <url> --key <key>` | First-time setup: detect identity, save config, install background service |
+| `cc-track init --user <email> --server <url> --key <key>` | First-time setup: save config and install background service |
 | `cc-track status` | Show current configuration |
-| `cc-track run --standalone [--range <r>]` | Terminal dashboard — no server needed |
+| `cc-track run --standalone [--user <id>] [--range <r>]` | Terminal dashboard — no server needed |
 | `cc-track run` | Run in foreground using saved server config |
 | `cc-track uninstall` | Stop and remove the background service |
-
----
-
-## Identity detection
-
-The agent resolves your identity automatically — no manual email entry. It tries each source in order and stops at the first match:
-
-| Priority | Source | How |
-|---|---|---|
-| 1 | **macOS Keychain** | Reads the Claude Code OAuth token, decodes email from the JWT |
-| 2 | **`~/.claude/.credentials.json`** | Same JWT decode, works cross-platform |
-| 3 | **`git config --global user.email`** | Your global git identity |
-| 4 | **OS username** | Last-resort fallback |
-
-No API call is ever made to Anthropic during identity detection.
 
 ---
 
@@ -186,4 +173,4 @@ npm test           # run tests once
 npm run test:watch # watch mode
 ```
 
-Tests cover pricing math, JSONL parsing, project extraction, record transformation, identity fallback chain, and service module exports. All tests run without network access or filesystem side effects.
+Tests cover pricing math, JSONL parsing, project extraction, record transformation, and service module exports. All tests run without network access or filesystem side effects.
