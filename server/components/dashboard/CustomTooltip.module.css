@@ -1,0 +1,17 @@
+.tooltip {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.tooltipLabel {
+  color: var(--color-text-muted);
+  margin-bottom: 6px;
+}
+
+.tooltipRow {
+  margin-bottom: 2px;
+}
