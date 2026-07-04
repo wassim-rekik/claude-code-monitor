@@ -14,6 +14,12 @@ import { calcCost, renderDashboard } from "./tui.js";
 const CLAUDE_LOGS = join(homedir(), ".claude", "projects");
 const STATE_FILE  = join(homedir(), ".claude", ".monitor-state.json");
 
+const DEFAULT_INTERVAL_MS       = 60_000;
+const INITIAL_RENDER_DELAY_MS   = 3_000;
+const WRITE_STABILITY_THRESHOLD_MS = 2_000;
+const WRITE_POLL_INTERVAL_MS    = 500;
+const PROJECT_PATH_SEGMENTS     = 2; // e.g. cwd "/Users/dev/myorg/myrepo" -> "myorg/myrepo"
+
 /** Pure helpers — exported for testing */
 export function _extractProject(filePath, logsRoot) {
   const parts = filePath.replace(logsRoot, "").split("/").filter(Boolean);
@@ -34,7 +40,7 @@ export function _toPayload(record, fallbackProject) {
   const model = (record.message?.model ?? record.model ?? "unknown")
     .replace(/-\d{8}$/, ""); // strip date suffix e.g. -20251001
   const project = record.cwd
-    ? record.cwd.split("/").filter(Boolean).slice(-2).join("/")
+    ? record.cwd.split("/").filter(Boolean).slice(-PROJECT_PATH_SEGMENTS).join("/")
     : fallbackProject;
   return {
     sessionId:     record.sessionId ?? record.session_id,
@@ -55,23 +61,23 @@ function saveState(state) {
   writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 }
 
-export function startWatcher({ user, serverUrl, apiKey, intervalMs = 60_000, standalone = false, since = null, rangeLabel = "today" }) {
+export function startWatcher({ user, serverUrl, apiKey, intervalMs = DEFAULT_INTERVAL_MS, standalone = false, since = null, rangeLabel = "today" }) {
   // standalone: always start from byte 0 so the time filter controls what's shown
   const cursors = standalone ? {} : loadState();
 
   // Groups keyed by "project|||model" for the grouped dashboard
   const groups = new Map();
 
-  function accumulateRecord(rec) {
-    if (since && new Date(rec.timestamp) < since) return;
-    const key = `${rec.project}|||${rec.model}`;
+  function accumulateRecord(record) {
+    if (since && new Date(record.timestamp) < since) return;
+    const key = `${record.project}|||${record.model}`;
     if (!groups.has(key)) {
-      groups.set(key, { project: rec.project, model: rec.model, tokens: 0, cost: 0, sessions: new Set() });
+      groups.set(key, { project: record.project, model: record.model, tokens: 0, cost: 0, sessions: new Set() });
     }
-    const g = groups.get(key);
-    g.tokens += rec.inputTokens + rec.outputTokens;
-    g.cost   += calcCost(rec.model, rec);
-    g.sessions.add(rec.sessionId);
+    const group = groups.get(key);
+    group.tokens += record.inputTokens + record.outputTokens;
+    group.cost   += calcCost(record.model, record);
+    group.sessions.add(record.sessionId);
   }
 
   async function processFile(filePath) {
@@ -88,8 +94,9 @@ export function startWatcher({ user, serverUrl, apiKey, intervalMs = 60_000, sta
 
     if (standalone) {
       cursors[filePath] = size;
-      for (const rec of records.map(r => _toPayload(r, _extractProject(filePath, CLAUDE_LOGS)))) {
-        accumulateRecord(rec);
+      const project = _extractProject(filePath, CLAUDE_LOGS);
+      for (const record of records.map(r => _toPayload(r, project))) {
+        accumulateRecord(record);
       }
       return;
     }
@@ -113,34 +120,38 @@ export function startWatcher({ user, serverUrl, apiKey, intervalMs = 60_000, sta
       if (res.ok) {
         cursors[filePath] = size;
         saveState(cursors);
-        console.log(`[monitor] Shipped ${payload.length} records for ${user}`);
+        console.log(`[cc-track] Shipped ${payload.length} records for ${user}`);
       } else {
-        console.error(`[monitor] Server error ${res.status} — will retry`);
+        console.error(`[cc-track] Server error ${res.status} — will retry`);
       }
     } catch (e) {
-      console.error("[monitor] Network error:", e.message, "— will retry");
+      console.error("[cc-track] Network error:", e.message, "— will retry");
     }
+  }
+
+  function logProcessingError(filePath, err) {
+    console.error(`[cc-track] Failed to process ${filePath}:`, err.message);
   }
 
   const watcher = chokidar.watch(`${CLAUDE_LOGS}/**/*.jsonl`, {
     ignoreInitial: false,
     persistent: true,
-    awaitWriteFinish: { stabilityThreshold: 2000, pollInterval: 500 },
+    awaitWriteFinish: { stabilityThreshold: WRITE_STABILITY_THRESHOLD_MS, pollInterval: WRITE_POLL_INTERVAL_MS },
   });
 
   watcher
-    .on("add",    path => processFile(path).catch(console.error))
-    .on("change", path => processFile(path).catch(console.error));
+    .on("add",    path => processFile(path).catch(err => logProcessingError(path, err)))
+    .on("change", path => processFile(path).catch(err => logProcessingError(path, err)));
 
   if (standalone) {
     // Render immediately after startup files settle, then on every interval
-    setTimeout(() => renderDashboard(groups, user, rangeLabel), 3000);
+    setTimeout(() => renderDashboard(groups, user, rangeLabel), INITIAL_RENDER_DELAY_MS);
     setInterval(() => {
-      Object.keys(cursors).forEach(p => processFile(p).catch(console.error));
+      Object.keys(cursors).forEach(p => processFile(p).catch(err => logProcessingError(p, err)));
       renderDashboard(groups, user, rangeLabel);
     }, intervalMs);
   } else {
-    console.log(`[monitor] Watching ${CLAUDE_LOGS} as ${user}`);
+    console.log(`[cc-track] Watching ${CLAUDE_LOGS} as ${user}`);
   }
 
   return watcher;

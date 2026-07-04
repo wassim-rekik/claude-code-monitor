@@ -9,9 +9,9 @@ import { startWatcher } from "./watcher.js";
 
 const config = loadConfig();
 if (!config) {
-  console.error("[claude-monitor] Not configured. Run: claude-monitor init --server <url> --key <key>");
+  console.error("[cc-track] Not configured. Run: cc-track init --user <email> --server <url> --key <key>");
   process.exit(1);
 }
 
-console.log(`[claude-monitor] Starting as ${config.user} → ${config.serverUrl}`);
+console.log(`[cc-track] Starting as ${config.user} → ${config.serverUrl}`);
 startWatcher(config);

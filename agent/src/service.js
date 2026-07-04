@@ -63,9 +63,11 @@ function installMac() {
 </dict>
 </plist>`;
 
+  // Unload any previously-installed LaunchAgent first so `launchctl load` doesn't
+  // fail with "already loaded" on reinstall.
+  const alreadyInstalled = existsSync(plistPath);
   writeFileSync(plistPath, plist);
-
-  try { execSync(`launchctl unload "${plistPath}" 2>/dev/null`); } catch {}
+  if (alreadyInstalled) execSync(`launchctl unload "${plistPath}"`);
   execSync(`launchctl load "${plistPath}"`);
 
   console.log(`✓ LaunchAgent installed → ${plistPath}`);
@@ -113,18 +115,22 @@ WantedBy=default.target
 
 export function uninstallService() {
   const platform = process.platform;
-  if (platform === "darwin") {
-    const plistPath = join(homedir(), "Library", "LaunchAgents", "com.cc-track-agent.plist");
-    try {
+  try {
+    if (platform === "darwin") {
+      const plistPath = join(homedir(), "Library", "LaunchAgents", "com.cc-track-agent.plist");
       execSync(`launchctl unload "${plistPath}"`);
       execSync(`rm "${plistPath}"`);
       console.log("✓ LaunchAgent removed");
-    } catch (e) { console.error(e.message); }
-  } else if (platform === "win32") {
-    execSync(`reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v CcTrackAgent /f`);
-    console.log("✓ Registry key removed");
-  } else {
-    execSync("systemctl --user disable --now cc-track-agent");
-    console.log("✓ systemd service removed");
+    } else if (platform === "win32") {
+      execSync(`reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v CcTrackAgent /f`);
+      console.log("✓ Registry key removed");
+    } else {
+      execSync("systemctl --user disable --now cc-track-agent");
+      console.log("✓ systemd service removed");
+    }
+  } catch (e) {
+    console.error(`✗ Uninstall failed: ${e.message}`);
+    console.error("  The service may already be uninstalled, or may require manual removal.");
+    process.exit(1);
   }
 }
