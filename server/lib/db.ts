@@ -39,6 +39,17 @@ export function migrate(): Promise<void> {
       -- record so that re-shipping the same record (agent retry, at-least-once
       -- delivery) is a no-op instead of a duplicate row. Appended as a new
       -- statement rather than editing the CREATE TABLE above.
+      --
+      -- Data predating this migration may already contain duplicates of that
+      -- identity, so they're collapsed (keeping the earliest row) before the
+      -- unique index is created; this DELETE is a no-op on every later run.
+      DELETE FROM usage_records a
+        USING usage_records b
+        WHERE a.id > b.id
+          AND a.session_id = b.session_id
+          AND a.model = b.model
+          AND a.ts = b.ts;
+
       CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_records_identity
         ON usage_records(session_id, model, ts);
     `,
